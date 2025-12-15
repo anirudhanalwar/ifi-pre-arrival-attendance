@@ -1,9 +1,10 @@
 import { BarcodeScanningResult, CameraType, CameraView, useCameraPermissions } from 'expo-camera';
-import { useFocusEffect, useRouter } from 'expo-router'; // Added useRouter
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import React, { useEffect, useRef, useState } from 'react'; // Added useRef
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Dimensions,
   StyleSheet,
   Text,
@@ -26,7 +27,7 @@ const API_CONFIG = {
   // Set to false when using production backend
   IS_DEVELOPMENT: true,
   
-  // Optional: Add API key for security (if your backend requires it)
+  // Optional: Add API key for security (if your backend needs authentication)
   API_KEY: 'your-api-key-here', // Optional - only if backend needs authentication
 };
 
@@ -36,7 +37,7 @@ const getApiUrl = () => {
 };
 
 export default function BarcodeScannerScreen() {
-  const router = useRouter(); // Added router
+  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [scannedData, setScannedData] = useState<string>('');
@@ -45,9 +46,11 @@ export default function BarcodeScannerScreen() {
   const [isActive, setIsActive] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [lastScanStatus, setLastScanStatus] = useState<'success' | 'error' | null>(null);
+  const [scanType, setScanType] = useState<string>('');
   
   // Ref to track if alert is showing to prevent duplicate scans
   const alertIsShowing = useRef(false);
+  const currentIsoTime = useRef<string>('');
 
   // Lock screen orientation to portrait
   useEffect(() => {
@@ -138,6 +141,7 @@ export default function BarcodeScannerScreen() {
     
     setScanned(true);
     setScannedData(data);
+    setScanType(type);
     
     // Get current date/time
     const now = new Date();
@@ -149,34 +153,56 @@ export default function BarcodeScannerScreen() {
       minute: '2-digit',
       second: '2-digit',
     });
-    const isoTime = now.toISOString(); // For database
+    const isoTime = now.toISOString();
+    currentIsoTime.current = isoTime;
     
     setScanTime(formattedTime);
     
     // Mark that alert is showing
     alertIsShowing.current = true;
     
-    // Send data to server in background
-    sendScanToServer(data, isoTime, type).then(result => {
-      // Auto-dismiss the scanner and show success in UI instead of alert
-      if (result.success) {
-        // Auto reset after 2 seconds for success
-        setTimeout(() => {
-          alertIsShowing.current = false;
-          resetScanner();
-        }, 2000);
-      } else {
-        // For errors, show brief alert then auto-dismiss
-        setTimeout(() => {
-          alertIsShowing.current = false;
-          // Don't auto-reset on error, let user decide
-        }, 3000);
-      }
-    });
+    // Show confirmation dialog before sending to server
+    Alert.alert(
+      'Confirm Scan',
+      `Scanned Data: ${data}\nIs this correct?`,
+      [
+        { 
+          text: 'Cancel', 
+          style: 'cancel',
+          onPress: () => {
+            alertIsShowing.current = false;
+            resetScanner();
+          }
+        },
+        { 
+          text: 'Yes, Submit', 
+          style: 'default',
+          onPress: () => {
+            // Send data to server after confirmation
+            sendScanToServer(data, isoTime, type).then(result => {
+              // Auto-dismiss the scanner and show success in UI
+              if (result.success) {
+                // Auto reset after 2 seconds for success
+                setTimeout(() => {
+                  alertIsShowing.current = false;
+                  resetScanner();
+                }, 2000);
+              } else {
+                // For errors, show brief alert then auto-dismiss
+                setTimeout(() => {
+                  alertIsShowing.current = false;
+                  // Don't auto-reset on error, let user decide
+                }, 3000);
+              }
+            });
+          }
+        }
+      ]
+    );
   };
 
-  const retrySend = async (employeeId: string, scanDateTime: string, scanType: string) => {
-    const result = await sendScanToServer(employeeId, scanDateTime, scanType);
+  const retrySend = async () => {
+    const result = await sendScanToServer(scannedData, currentIsoTime.current, scanType);
     
     if (result.success) {
       // Auto reset after successful retry
@@ -190,8 +216,10 @@ export default function BarcodeScannerScreen() {
     setScanned(false);
     setScannedData('');
     setScanTime('');
+    setScanType('');
     setLastScanStatus(null);
     alertIsShowing.current = false;
+    currentIsoTime.current = '';
   };
 
   const toggleCameraFacing = () => {
@@ -204,9 +232,7 @@ export default function BarcodeScannerScreen() {
 
   // Get computer IP for development (you need to fill this in)
   const getComputerIP = () => {
-    // You need to find your computer's IP address manually
-    // Run `ipconfig` in Windows CMD and look for "IPv4 Address"
-    return '10.234.65.76'; // REPLACE WITH YOUR ACTUAL IP
+    return '10.234.65.76';
   };
 
   if (!permission) {
@@ -246,17 +272,8 @@ export default function BarcodeScannerScreen() {
         onBarcodeScanned={scanned || isSending ? undefined : handleBarCodeScanned}
         barcodeScannerSettings={{
           barcodeTypes: [
-            'qr',
-            'pdf417',
-            'code128',
             'code39',
             'code93',
-            'codabar',
-            'ean13',
-            'ean8',
-            'itf14',
-            'upc_a',
-            'upc_e',
           ],
         }}
       >
@@ -303,6 +320,7 @@ export default function BarcodeScannerScreen() {
               {scannedData || 'No data'}
             </Text>
             <Text style={styles.resultTime}>Scan Time: {scanTime}</Text>
+            <Text style={styles.resultType}>Barcode Type: {scanType}</Text>
             
             {/* Status indicator */}
             {lastScanStatus && (
@@ -332,7 +350,7 @@ export default function BarcodeScannerScreen() {
               {lastScanStatus === 'error' && (
                 <TouchableOpacity
                   style={[styles.button, styles.retryButton]}
-                  onPress={() => retrySend(scannedData, new Date().toISOString(), 'retry')}
+                  onPress={retrySend}
                   disabled={isSending}
                 >
                   <Text style={styles.buttonText}>Retry</Text>
@@ -534,13 +552,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f0f0',
     padding: 12,
     borderRadius: 8,
-    marginBottom: 12,
+    marginBottom: 8,
     textAlign: 'center',
     width: '100%',
     color: '#007AFF',
     fontWeight: '500',
   },
   resultTime: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 4,
+  },
+  resultType: {
     fontSize: 14,
     color: '#666',
     marginBottom: 10,
