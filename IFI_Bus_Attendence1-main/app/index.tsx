@@ -17,7 +17,7 @@ const SCAN_FRAME_SIZE = SCREEN_WIDTH * 0.7;
 // API Configuration - YOU NEED TO UPDATE THESE VALUES
 const API_CONFIG = {
   // For development (testing on same network as your computer)
-  DEV_API_URL: 'http://192.168.0.107:5000/api/scan',
+  DEV_API_URL: 'http://10.234.65.76:5000/api/scan',
   
   // For production (when deployed to a server)
   PROD_API_URL: 'https://192.168.2.4/api/scan',
@@ -206,7 +206,7 @@ export default function BarcodeScannerScreen() {
   const getComputerIP = () => {
     // You need to find your computer's IP address manually
     // Run `ipconfig` in Windows CMD and look for "IPv4 Address"
-    return '192.168.0.107'; // REPLACE WITH YOUR ACTUAL IP
+    return '10.234.65.76'; // REPLACE WITH YOUR ACTUAL IP
   };
 
   if (!permission) {

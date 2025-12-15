@@ -15,9 +15,9 @@ import {
 
 // Use the same API configuration from scanner
 const API_CONFIG = {
-  DEV_API_URL: 'http://192.168.0.107:3000/api/scan',
+  DEV_API_URL: 'http://10.234.65.76:5000/api/scan',
   PROD_API_URL: 'https://192.168.2.4/api/scan',
-  IS_DEVELOPMENT: false,
+  IS_DEVELOPMENT: true,
   API_KEY: 'your-api-key-here',
 };
 
