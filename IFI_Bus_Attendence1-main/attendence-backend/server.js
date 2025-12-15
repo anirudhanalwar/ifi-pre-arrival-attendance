@@ -8,6 +8,34 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ✅ ADD THIS: GET endpoint for browser testing
+app.get('/', (req, res) => {
+    res.send(`
+        <html>
+            <head><title>Attendance API</title></head>
+            <body>
+                <h1>✅ Attendance API Server is Running!</h1>
+                <p>Port: ${API_PORT}</p>
+                <p>Time: ${new Date().toLocaleString()}</p>
+                <p>Endpoints:</p>
+                <ul>
+                    <li>POST /api/scan - Submit a scan</li>
+                    <li>GET /health - Health check</li>
+                </ul>
+            </body>
+        </html>
+    `);
+});
+
+// ✅ ADD THIS: Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        serverTime: new Date().toISOString(),
+        port: API_PORT
+    });
+});
+
 // POST /api/scan - receive scan from app
 app.post('/api/scan', async (req, res) => {
     const { employeeId, scanDateTime, scanType, deviceInfo } = req.body;
@@ -52,9 +80,28 @@ app.post('/api/scan', async (req, res) => {
     }
 });
 
+// ✅ ADD THIS: Catch-all for undefined routes
+app.use('*', (req, res) => {
+    res.status(404).send(`
+        <html>
+            <body>
+                <h1>404 - Route Not Found</h1>
+                <p>Requested: ${req.originalUrl}</p>
+                <p>Try visiting: <a href="/">Home Page</a></p>
+            </body>
+        </html>
+    `);
+});
+
 // Start server
-app.listen(API_PORT, () => {
-    console.log(`Server running on port ${API_PORT}`);
+app.listen(API_PORT, '0.0.0.0', () => { // ✅ Added '0.0.0.0' here
+    console.log(`================================`);
+    console.log(`✅ Server is running!`);
+    console.log(`📡 Port: ${API_PORT}`);
+    console.log(`🌐 Local: http://localhost:${API_PORT}`);
+    console.log(`🔗 Health: http://localhost:${API_PORT}/health`);
+    console.log(`📱 API: POST http://localhost:${API_PORT}/api/scan`);
+    console.log(`================================`);
 });
 
 module.exports = app;
