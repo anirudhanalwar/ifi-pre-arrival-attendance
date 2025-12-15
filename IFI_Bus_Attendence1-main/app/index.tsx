@@ -9,31 +9,30 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
+  Animated,
+  Vibration
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SCAN_FRAME_SIZE = SCREEN_WIDTH * 0.7;
 
-// API Configuration - YOU NEED TO UPDATE THESE VALUES
+// API Configuration
 const API_CONFIG = {
-  // For development (testing on same network as your computer)
   DEV_API_URL: 'http://10.234.65.76:5000/api/scan',
-  
-  // For production (when deployed to a server)
   PROD_API_URL: 'https://192.168.2.4/api/scan',
-  
-  // Set to true when testing on physical device with local backend
-  // Set to false when using production backend
   IS_DEVELOPMENT: true,
-  
-  // Optional: Add API key for security (if your backend needs authentication)
-  API_KEY: 'your-api-key-here', // Optional - only if backend needs authentication
+  API_KEY: 'your-api-key-here',
 };
 
-// Helper function to get API URL based on environment
 const getApiUrl = () => {
   return API_CONFIG.IS_DEVELOPMENT ? API_CONFIG.DEV_API_URL : API_CONFIG.PROD_API_URL;
+};
+
+const isValidEmployeeId = (data: string): boolean => {
+  const fiveDigitRegex = /^\d{5}$/;
+  return fiveDigitRegex.test(data);
 };
 
 export default function BarcodeScannerScreen() {
@@ -47,10 +46,23 @@ export default function BarcodeScannerScreen() {
   const [isSending, setIsSending] = useState(false);
   const [lastScanStatus, setLastScanStatus] = useState<'success' | 'error' | 'duplicate' | null>(null);
   const [scanType, setScanType] = useState<string>('');
+  const [validationError, setValidationError] = useState<string>('');
+  const [torchEnabled, setTorchEnabled] = useState(false);
+  const [focusMode, setFocusMode] = useState<'on' | 'off'>('on');
+  const [scanConfirmationCount, setScanConfirmationCount] = useState(0);
+  const [isConfirmingScan, setIsConfirmingScan] = useState(false);
   
-  // Ref to track if alert is showing to prevent duplicate scans
-  const alertIsShowing = useRef(false);
-  const currentIsoTime = useRef<string>('');
+  // Refs for multiple-frame confirmation
+  const lastCodeRef = useRef<string | null>(null);
+  const confirmationCountRef = useRef<number>(0);
+  const confirmationTimeoutRef = useRef<number | null>(null);
+  
+  // Animation refs
+  const scanLineAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  
+  // Ref to track if we're currently processing a scan
+  const isProcessing = useRef(false);
   
   // Track recent scans client-side for immediate feedback
   const recentScans = useRef<Set<string>>(new Set());
@@ -61,14 +73,74 @@ export default function BarcodeScannerScreen() {
     
     return () => {
       ScreenOrientation.unlockAsync();
+      if (confirmationTimeoutRef.current) {
+        clearTimeout(confirmationTimeoutRef.current);
+      }
     };
   }, []);
+
+  // Start scanning animations
+  useEffect(() => {
+    if (!scanned && !isProcessing.current) {
+      startScanningAnimations();
+    } else {
+      stopScanningAnimations();
+    }
+  }, [scanned, isProcessing.current]);
+
+  const startScanningAnimations = () => {
+    // Scanning line animation
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanLineAnim, {
+          toValue: 1,
+          duration: 2000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scanLineAnim, {
+          toValue: 0,
+          duration: 0,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+
+    // Pulse animation for corners
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.2,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  };
+
+  const stopScanningAnimations = () => {
+    scanLineAnim.stopAnimation();
+    pulseAnim.stopAnimation();
+  };
 
   // Handle screen focus to resume camera
   useFocusEffect(
     React.useCallback(() => {
       setIsActive(true);
-      alertIsShowing.current = false;
+      isProcessing.current = false;
+      lastCodeRef.current = null;
+      confirmationCountRef.current = 0;
+      setScanConfirmationCount(0);
+      setIsConfirmingScan(false);
+      
+      if (confirmationTimeoutRef.current) {
+        clearTimeout(confirmationTimeoutRef.current);
+      }
+      
       return () => {
         setIsActive(false);
       };
@@ -84,12 +156,10 @@ export default function BarcodeScannerScreen() {
       
       console.log('Sending scan to:', apiUrl);
       
-      // Prepare headers with proper typing
       const headers: Record<string, string> = {
         'Content-Type': 'application/json'
       };
       
-      // Add API key header if configured and not using default value
       if (API_CONFIG.API_KEY && API_CONFIG.API_KEY !== 'your-api-key-here') {
         headers['Authorization'] = `Bearer ${API_CONFIG.API_KEY}`;
       }
@@ -110,20 +180,19 @@ export default function BarcodeScannerScreen() {
       if (response.ok) {
         console.log('Scan sent successfully:', result);
         setLastScanStatus('success');
+        Vibration.vibrate(100);
         
-        // Add to client-side recent scans cache
         recentScans.current.add(employeeId);
         
-        // Remove from cache after 5 minutes
         setTimeout(() => {
           recentScans.current.delete(employeeId);
         }, 5 * 60 * 1000);
         
         return { success: true, message: result.message || 'Scan recorded successfully' };
       } else if (response.status === 409) {
-        // Handle duplicate scan (409 Conflict)
         console.log('Duplicate scan detected:', result);
         setLastScanStatus('duplicate');
+        Vibration.vibrate([100, 50, 100]);
         return { 
           success: false, 
           message: result.message || 'Employee was recently scanned',
@@ -132,6 +201,7 @@ export default function BarcodeScannerScreen() {
       } else {
         console.error('Server error:', result);
         setLastScanStatus('error');
+        Vibration.vibrate([100, 50, 100, 50, 100]);
         return { 
           success: false, 
           message: result.message || `Server error: ${response.status}` 
@@ -140,8 +210,8 @@ export default function BarcodeScannerScreen() {
     } catch (error: any) {
       console.error('Network error:', error);
       setLastScanStatus('error');
+      Vibration.vibrate([100, 50, 100, 50, 100]);
       
-      // Provide user-friendly error messages
       let errorMessage = 'Network error. Please check your connection.';
       
       if (error.message?.includes('Network request failed')) {
@@ -155,18 +225,69 @@ export default function BarcodeScannerScreen() {
   };
 
   const handleBarCodeScanned = async ({ type, data }: BarcodeScanningResult) => {
-    // Prevent multiple scans while alert is showing or sending
-    if (scanned || isSending || alertIsShowing.current) {
+    // Prevent multiple scans while processing
+    if (isProcessing.current || isSending || scanned) {
       return;
     }
     
-    // Client-side duplicate check (immediate feedback)
+    // 1. Validate the scanned data (5 digits only)
+    if (!isValidEmployeeId(data)) {
+      console.log('Invalid scan - not 5 digits:', data);
+      setValidationError('Invalid ID format. Must be 5 digits');
+      Vibration.vibrate(50);
+      
+      setTimeout(() => {
+        setValidationError('');
+      }, 1500);
+      return;
+    }
+    
+    // 2. Multiple-frame confirmation logic
+    if (data === lastCodeRef.current) {
+      confirmationCountRef.current++;
+    } else {
+      lastCodeRef.current = data;
+      confirmationCountRef.current = 1;
+    }
+    
+    setScanConfirmationCount(confirmationCountRef.current);
+    
+    // Show confirming UI feedback
+    setIsConfirmingScan(true);
+    
+    // Clear any existing timeout
+    if (confirmationTimeoutRef.current) {
+      clearTimeout(confirmationTimeoutRef.current);
+    }
+    
+    // Set timeout to reset confirmation if no repeated scan
+    confirmationTimeoutRef.current = setTimeout(() => {
+      lastCodeRef.current = null;
+      confirmationCountRef.current = 0;
+      setScanConfirmationCount(0);
+      setIsConfirmingScan(false);
+    }, 1000);
+    
+    // Only proceed if we have 2 or more consistent scans
+    if (confirmationCountRef.current < 2) {
+      return;
+    }
+    
+    // Clear the timeout since we're proceeding
+    if (confirmationTimeoutRef.current) {
+      clearTimeout(confirmationTimeoutRef.current);
+    }
+    
+    // 3. Client-side duplicate check
     if (recentScans.current.has(data)) {
+      console.log('Duplicate scan detected (client-side):', data);
+      isProcessing.current = true;
       setScanned(true);
       setScannedData(data);
       setScanType(type);
+      setLastScanStatus('duplicate');
+      setIsConfirmingScan(false);
       
-      // Get current date/time
       const now = new Date();
       const formattedTime = now.toLocaleString('en-US', {
         year: 'numeric',
@@ -177,24 +298,22 @@ export default function BarcodeScannerScreen() {
         second: '2-digit',
       });
       setScanTime(formattedTime);
-      setLastScanStatus('duplicate');
       
-      alertIsShowing.current = true;
-      
-      // Auto reset after 3 seconds for duplicate
       setTimeout(() => {
-        alertIsShowing.current = false;
+        isProcessing.current = false;
         resetScanner();
       }, 3000);
       
       return;
     }
     
+    // 4. If validation and confirmation passes, process the scan
+    isProcessing.current = true;
     setScanned(true);
     setScannedData(data);
     setScanType(type);
+    setIsConfirmingScan(false);
     
-    // Get current date/time
     const now = new Date();
     const formattedTime = now.toLocaleString('en-US', {
       year: 'numeric',
@@ -205,23 +324,19 @@ export default function BarcodeScannerScreen() {
       second: '2-digit',
     });
     const isoTime = now.toISOString();
-    currentIsoTime.current = isoTime;
     
     setScanTime(formattedTime);
     
-    // Mark that alert is showing
-    alertIsShowing.current = true;
-    
-    // Show confirmation dialog before sending to server
+    // Show confirmation dialog
     Alert.alert(
-      'Confirm Scan',
-      `Scanned Data: ${data}\n\nIs this correct?`,
+      'Confirm Employee ID',
+      `Employee ID: ${data}\n\nIs this correct?`,
       [
         { 
           text: 'Cancel', 
-          style: 'cancel',
+          style: 'destructive',
           onPress: () => {
-            alertIsShowing.current = false;
+            isProcessing.current = false;
             resetScanner();
           }
         },
@@ -229,39 +344,35 @@ export default function BarcodeScannerScreen() {
           text: 'Yes, Submit', 
           style: 'default',
           onPress: () => {
-            // Send data to server after confirmation
             sendScanToServer(data, isoTime, type).then(result => {
-              // Handle different responses
               if (result.success) {
-                // Auto reset after 2 seconds for success
                 setTimeout(() => {
-                  alertIsShowing.current = false;
+                  isProcessing.current = false;
                   resetScanner();
                 }, 2000);
               } else if (result.isDuplicate) {
-                // For duplicates, show message for 3 seconds then auto-reset
                 setTimeout(() => {
-                  alertIsShowing.current = false;
+                  isProcessing.current = false;
                   resetScanner();
                 }, 3000);
               } else {
-                // For other errors, don't auto-reset - let user decide
-                setTimeout(() => {
-                  alertIsShowing.current = false;
-                }, 3000);
+                isProcessing.current = false;
               }
+            }).catch(() => {
+              isProcessing.current = false;
             });
           }
         }
-      ]
+      ],
+      { cancelable: false }
     );
   };
 
   const retrySend = async () => {
-    const result = await sendScanToServer(scannedData, currentIsoTime.current, scanType);
+    const isoTime = new Date().toISOString();
+    const result = await sendScanToServer(scannedData, isoTime, scanType);
     
     if (result.success) {
-      // Auto reset after successful retry
       setTimeout(() => {
         resetScanner();
       }, 1500);
@@ -274,21 +385,43 @@ export default function BarcodeScannerScreen() {
     setScanTime('');
     setScanType('');
     setLastScanStatus(null);
-    alertIsShowing.current = false;
-    currentIsoTime.current = '';
+    setValidationError('');
+    setScanConfirmationCount(0);
+    setIsConfirmingScan(false);
+    isProcessing.current = false;
+    lastCodeRef.current = null;
+    confirmationCountRef.current = 0;
+    
+    if (confirmationTimeoutRef.current) {
+      clearTimeout(confirmationTimeoutRef.current);
+    }
+    
+    startScanningAnimations();
   };
 
   const toggleCameraFacing = () => {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
   };
 
+  const toggleTorch = () => {
+    setTorchEnabled(current => !current);
+  };
+
+  const toggleFocus = () => {
+    setFocusMode(current => current === 'on' ? 'off' : 'on');
+  };
+
   const navigateToManualEntry = () => {
     router.push('/manual-entry');
   };
 
-  // Get computer IP for development (you need to fill this in)
-  const getComputerIP = () => {
-    return '10.234.65.76';
+  const getScanConfirmationMessage = () => {
+    if (scanConfirmationCount === 1) {
+      return 'Scan detected...';
+    } else if (scanConfirmationCount >= 2) {
+      return '✓ Scan confirmed!';
+    }
+    return '';
   };
 
   if (!permission) {
@@ -302,6 +435,7 @@ export default function BarcodeScannerScreen() {
   if (!permission.granted) {
     return (
       <View style={styles.permissionContainer}>
+        <Ionicons name="camera-outline" size={64} color="#007AFF" />
         <Text style={styles.permissionText}>
           We need your permission to use the camera
         </Text>
@@ -325,37 +459,105 @@ export default function BarcodeScannerScreen() {
       <CameraView
         style={styles.camera}
         facing={facing}
-        onBarcodeScanned={scanned || isSending ? undefined : handleBarCodeScanned}
+        onBarcodeScanned={isProcessing.current || isSending ? undefined : handleBarCodeScanned}
         barcodeScannerSettings={{
           barcodeTypes: [
             'code39',
             'code93',
+            'code128',
+            'codabar',
+            'ean13',
+            'ean8',
+            'upc_a',
+            'upc_e',
+            'itf14',
           ],
         }}
+        enableTorch={torchEnabled}
+        focusable={focusMode === 'on'}
       >
         {/* Scan Frame Overlay */}
         <View style={styles.overlay}>
           <View style={styles.scanFrame}>
-            <View style={[styles.corner, styles.topLeft]} />
-            <View style={[styles.corner, styles.topRight]} />
-            <View style={[styles.corner, styles.bottomLeft]} />
-            <View style={[styles.corner, styles.bottomRight]} />
+            {/* Animated corners */}
+            <Animated.View style={[styles.corner, styles.topLeft, { transform: [{ scale: pulseAnim }] }]} />
+            <Animated.View style={[styles.corner, styles.topRight, { transform: [{ scale: pulseAnim }] }]} />
+            <Animated.View style={[styles.corner, styles.bottomLeft, { transform: [{ scale: pulseAnim }] }]} />
+            <Animated.View style={[styles.corner, styles.bottomRight, { transform: [{ scale: pulseAnim }] }]} />
+            
+            {/* Scanning line */}
+            <Animated.View 
+              style={[
+                styles.scanLine,
+                {
+                  transform: [{
+                    translateY: scanLineAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, SCAN_FRAME_SIZE * 0.6]
+                    })
+                  }]
+                }
+              ]} 
+            />
           </View>
           
-          {/* Instructions */}
+          {/* Instructions and status */}
           <View style={styles.instructionsContainer}>
-            <Text style={styles.instructionsText}>
-              Position ID card barcode within the frame
-            </Text>
+            {isConfirmingScan ? (
+              <View style={styles.confirmingContainer}>
+                <Text style={styles.confirmingText}>
+                  {getScanConfirmationMessage()}
+                </Text>
+                <Text style={styles.confirmingSubText}>
+                  Hold steady for confirmation...
+                </Text>
+              </View>
+            ) : validationError ? (
+              <Text style={styles.errorText}>
+                {validationError}
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.instructionsText}>
+                  Scan 5-digit Employee ID
+                </Text>
+                <Text style={styles.instructionsSubText}>
+                  Position barcode within frame
+                </Text>
+              </>
+            )}
           </View>
 
-          {/* Manual Entry Button Overlay */}
-          <TouchableOpacity
-            style={styles.manualEntryButtonOverlay}
-            onPress={navigateToManualEntry}
-          >
-            <Text style={styles.manualEntryButtonText}>Manual Entry</Text>
-          </TouchableOpacity>
+          {/* Camera Controls Overlay */}
+          <View style={styles.controlsOverlay}>
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={toggleTorch}
+            >
+              <Ionicons name={torchEnabled ? "flash" : "flash-outline"} size={24} color="white" />
+              <Text style={styles.controlButtonText}>
+                {torchEnabled ? 'Flash On' : 'Flash Off'}
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={toggleFocus}
+            >
+              <Ionicons name={focusMode === 'on' ? "scan-circle" : "scan-circle-outline"} size={24} color="white" />
+              <Text style={styles.controlButtonText}>
+                {focusMode === 'on' ? 'Auto Focus' : 'Manual Focus'}
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={navigateToManualEntry}
+            >
+              <Ionicons name="keypad-outline" size={24} color="white" />
+              <Text style={styles.controlButtonText}>Manual Entry</Text>
+            </TouchableOpacity>
+          </View>
 
           {/* Loading indicator when sending data */}
           {isSending && (
@@ -367,16 +569,30 @@ export default function BarcodeScannerScreen() {
         </View>
       </CameraView>
 
-      {/* Controls Panel */}
+      {/* Bottom Controls Panel */}
       <View style={styles.controlsContainer}>
         {scanned ? (
           <View style={styles.scanResultContainer}>
-            <Text style={styles.resultTitle}>Scanned Data:</Text>
-            <Text style={styles.resultData} numberOfLines={2}>
-              {scannedData || 'No data'}
-            </Text>
-            <Text style={styles.resultTime}>Scan Time: {scanTime}</Text>
-            <Text style={styles.resultType}>Barcode Type: {scanType}</Text>
+            <View style={styles.resultHeader}>
+              <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+              <Text style={styles.resultTitle}>Scan Complete</Text>
+            </View>
+            
+            <View style={styles.resultCard}>
+              <Text style={styles.resultLabel}>Employee ID</Text>
+              <Text style={styles.resultData}>{scannedData}</Text>
+              
+              <View style={styles.resultDetails}>
+                <View style={styles.detailItem}>
+                  <Ionicons name="time-outline" size={14} color="#666" />
+                  <Text style={styles.detailText}>{scanTime}</Text>
+                </View>
+                <View style={styles.detailItem}>
+                  <Ionicons name="barcode-outline" size={14} color="#666" />
+                  <Text style={styles.detailText}>{scanType}</Text>
+                </View>
+              </View>
+            </View>
             
             {/* Status indicator */}
             {lastScanStatus && (
@@ -386,18 +602,40 @@ export default function BarcodeScannerScreen() {
                 lastScanStatus === 'duplicate' ? styles.statusDuplicate : 
                 styles.statusError
               ]}>
+                <Ionicons 
+                  name={
+                    lastScanStatus === 'success' ? 'checkmark-circle' :
+                    lastScanStatus === 'duplicate' ? 'alert-circle' : 'close-circle'
+                  } 
+                  size={18} 
+                  color={
+                    lastScanStatus === 'success' ? '#155724' :
+                    lastScanStatus === 'duplicate' ? '#856404' : '#721c24'
+                  } 
+                />
                 <Text style={[
                   styles.statusText,
                   lastScanStatus === 'duplicate' && { color: '#856404' }
                 ]}>
-                  {lastScanStatus === 'success' ? '✓ Scan recorded successfully' : 
-                   lastScanStatus === 'duplicate' ? '⚠ Employee already scanned recently' : 
-                   '✗ Failed to send'}
+                  {lastScanStatus === 'success' ? ' Scan recorded successfully' : 
+                   lastScanStatus === 'duplicate' ? ' Employee already scanned recently' : 
+                   ' Failed to send scan'}
                 </Text>
               </View>
             )}
             
             <View style={styles.buttonRow}>
+              {lastScanStatus === 'error' && (
+                <TouchableOpacity
+                  style={[styles.button, styles.retryButton]}
+                  onPress={retrySend}
+                  disabled={isSending}
+                >
+                  <Ionicons name="refresh" size={20} color="white" />
+                  <Text style={styles.buttonText}> Retry</Text>
+                </TouchableOpacity>
+              )}
+              
               <TouchableOpacity
                 style={[styles.button, styles.scanAgainButton]}
                 onPress={resetScanner}
@@ -406,65 +644,57 @@ export default function BarcodeScannerScreen() {
                 {isSending ? (
                   <ActivityIndicator color="white" size="small" />
                 ) : (
-                  <Text style={styles.buttonText}>Scan Again</Text>
+                  <>
+                    <Ionicons name="scan-outline" size={20} color="white" />
+                    <Text style={styles.buttonText}> Scan Again</Text>
+                  </>
                 )}
-              </TouchableOpacity>
-              
-              {lastScanStatus === 'error' && (
-                <TouchableOpacity
-                  style={[styles.button, styles.retryButton]}
-                  onPress={retrySend}
-                  disabled={isSending}
-                >
-                  <Text style={styles.buttonText}>Retry</Text>
-                </TouchableOpacity>
-              )}
-              
-              <TouchableOpacity
-                style={[styles.button, styles.flipButton]}
-                onPress={toggleCameraFacing}
-                disabled={isSending}
-              >
-                <Text style={styles.buttonText}>Flip Camera</Text>
               </TouchableOpacity>
             </View>
             
             <TouchableOpacity
-              style={styles.manualEntryLink}
-              onPress={navigateToManualEntry}
+              style={styles.flipCameraButton}
+              onPress={toggleCameraFacing}
             >
-              <Text style={styles.manualEntryLinkText}>Or enter manually →</Text>
+              <Ionicons name="camera-reverse-outline" size={20} color="#007AFF" />
+              <Text style={styles.flipCameraText}>Flip Camera</Text>
             </TouchableOpacity>
-            
-            <Text style={styles.noteText}>
-              {API_CONFIG.IS_DEVELOPMENT 
-                ? 'Development Mode: Sending to ' + getApiUrl()
-                : 'Data is being sent to your SQL Server database.'}
-            </Text>
           </View>
         ) : (
           <View style={styles.readyToScanContainer}>
-            <Text style={styles.readyText}>Ready to Scan</Text>
+            <View style={styles.statusIndicator}>
+              <Ionicons name="scan-outline" size={24} color="#007AFF" />
+              <Text style={styles.readyText}>Ready to Scan</Text>
+            </View>
+            
             <View style={styles.buttonRow}>
               <TouchableOpacity
                 style={[styles.button, styles.flipButton]}
                 onPress={toggleCameraFacing}
               >
-                <Text style={styles.buttonText}>Flip Camera</Text>
+                <Ionicons name="camera-reverse-outline" size={20} color="white" />
+                <Text style={styles.buttonText}> Flip Camera</Text>
               </TouchableOpacity>
               
               <TouchableOpacity
                 style={[styles.button, styles.manualEntryButton]}
                 onPress={navigateToManualEntry}
               >
-                <Text style={styles.buttonText}>Manual Entry</Text>
+                <Ionicons name="keypad-outline" size={20} color="white" />
+                <Text style={styles.buttonText}> Manual Entry</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.deviceInfo}>
-              {API_CONFIG.IS_DEVELOPMENT 
-                ? `Dev Mode: ${getApiUrl().replace('http://', '')}`
-                : 'Production Mode'}
-            </Text>
+            
+            <View style={styles.infoContainer}>
+              <Text style={styles.validationNote}>
+                Only 5-digit employee IDs accepted (00000-99999)
+              </Text>
+              <Text style={styles.deviceInfo}>
+                {API_CONFIG.IS_DEVELOPMENT 
+                  ? `Dev Mode: ${getApiUrl().replace('http://', '')}`
+                  : 'Production Mode'}
+              </Text>
+            </View>
           </View>
         )}
       </View>
@@ -485,15 +715,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
   },
   permissionText: {
-    fontSize: 16,
+    fontSize: 18,
     textAlign: 'center',
-    marginBottom: 20,
+    marginVertical: 20,
+    color: '#333',
   },
   permissionButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   permissionButtonText: {
     color: 'white',
@@ -505,7 +738,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -515,6 +748,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'transparent',
     position: 'relative',
+    overflow: 'hidden',
   },
   corner: {
     position: 'absolute',
@@ -546,100 +780,192 @@ const styles = StyleSheet.create({
     borderBottomWidth: 4,
     borderRightWidth: 4,
   },
+  scanLine: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#007AFF',
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+    elevation: 4,
+  },
   instructionsContainer: {
     position: 'absolute',
-    bottom: 50,
+    bottom: 100,
     alignItems: 'center',
+    width: '100%',
   },
   instructionsText: {
     color: 'white',
-    fontSize: 16,
-    fontWeight: '500',
+    fontSize: 18,
+    fontWeight: '600',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginBottom: 8,
+  },
+  instructionsSubText: {
+    color: '#ddd',
+    fontSize: 14,
     textAlign: 'center',
     backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  confirmingContainer: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,122,255,0.9)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 25,
+  },
+  confirmingText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  confirmingSubText: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+  },
+  errorText: {
+    color: '#ff6b6b',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 20,
   },
-  manualEntryButtonOverlay: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-  },
-  manualEntryButtonText: {
-    color: '#007AFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
+controlsOverlay: {
+  position: 'absolute',
+  top: 40, // At the very top
+  left: 0, // Start from left
+  right: 0, // Stretch across full width
+  flexDirection: 'row', // Horizontal layout
+  justifyContent: 'space-around', // Space them evenly
+  alignItems: 'center',
+  paddingHorizontal: 10,
+},
+controlButton: {
+  alignItems: 'center',
+  backgroundColor: 'rgba(0,0,0,0.8)',
+  paddingHorizontal: 12,
+  paddingVertical: 6,
+  borderRadius: 20,
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.3)',
+  minWidth: 80,
+},
+controlButtonText: {
+  color: 'white',
+  fontSize: 11,
+  marginTop: 2,
+  fontWeight: '500',
+},
   loadingOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.9)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   loadingText: {
     color: 'white',
-    marginTop: 10,
+    marginTop: 16,
     fontSize: 16,
+    fontWeight: '500',
   },
   controlsContainer: {
     backgroundColor: 'white',
-    padding: 20,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    padding: 24,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 10,
   },
   scanResultContainer: {
     alignItems: 'center',
   },
-  readyToScanContainer: {
+  resultHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 20,
   },
   resultTitle: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 'bold',
-    marginBottom: 8,
+    marginLeft: 8,
     color: '#333',
   },
-  resultData: {
-    fontSize: 16,
-    backgroundColor: '#f0f0f0',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
-    textAlign: 'center',
+  resultCard: {
+    backgroundColor: '#f8f9fa',
+    padding: 20,
+    borderRadius: 16,
     width: '100%',
-    color: '#007AFF',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  resultLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
     fontWeight: '500',
   },
-  resultTime: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
+  resultData: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#007AFF',
+    marginBottom: 16,
+    textAlign: 'center',
+    letterSpacing: 4,
   },
-  resultType: {
-    fontSize: 14,
+  resultDetails: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: '#e9ecef',
+    paddingTop: 12,
+  },
+  detailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  detailText: {
+    fontSize: 12,
     color: '#666',
-    marginBottom: 10,
   },
   statusIndicator: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 15,
-    marginBottom: 15,
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginBottom: 20,
+    width: '100%',
+    justifyContent: 'center',
   },
   statusSuccess: {
     backgroundColor: '#d4edda',
+    borderWidth: 1,
+    borderColor: '#c3e6cb',
   },
   statusDuplicate: {
     backgroundColor: '#fff3cd',
@@ -648,31 +974,42 @@ const styles = StyleSheet.create({
   },
   statusError: {
     backgroundColor: '#f8d7da',
+    borderWidth: 1,
+    borderColor: '#f5c6cb',
   },
   statusText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
-    color: '#333',
+    marginLeft: 8,
+  },
+  readyToScanContainer: {
+    alignItems: 'center',
   },
   readyText: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#007AFF',
-    marginBottom: 20,
+    marginLeft: 8,
   },
   buttonRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 12,
     width: '100%',
-    marginBottom: 10,
+    marginBottom: 16,
   },
   button: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
+    paddingVertical: 16,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   scanAgainButton: {
     backgroundColor: '#34C759',
@@ -691,29 +1028,40 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  manualEntryLink: {
-    marginTop: 10,
-    marginBottom: 15,
+  flipCameraButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 25,
+    backgroundColor: '#f0f0f0',
+    marginTop: 8,
   },
-  manualEntryLinkText: {
+  flipCameraText: {
     color: '#007AFF',
     fontSize: 14,
-    fontWeight: '500',
-    textDecorationLine: 'underline',
+    fontWeight: '600',
+    marginLeft: 8,
   },
-  noteText: {
-    fontSize: 12,
-    color: '#999',
+  infoContainer: {
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  validationNote: {
+    fontSize: 13,
+    color: '#ff6b6b',
     textAlign: 'center',
-    marginTop: 5,
-    fontStyle: 'italic',
+    marginBottom: 4,
+    fontWeight: '500',
   },
   deviceInfo: {
     fontSize: 11,
     color: '#666',
     textAlign: 'center',
-    marginTop: 10,
     fontFamily: 'monospace',
+    backgroundColor: '#f5f5f5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
   },
 });
-//aniruth is gay 
