@@ -45,12 +45,15 @@ export default function BarcodeScannerScreen() {
   const [facing, setFacing] = useState<CameraType>('back');
   const [isActive, setIsActive] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const [lastScanStatus, setLastScanStatus] = useState<'success' | 'error' | null>(null);
+  const [lastScanStatus, setLastScanStatus] = useState<'success' | 'error' | 'duplicate' | null>(null);
   const [scanType, setScanType] = useState<string>('');
   
   // Ref to track if alert is showing to prevent duplicate scans
   const alertIsShowing = useRef(false);
   const currentIsoTime = useRef<string>('');
+  
+  // Track recent scans client-side for immediate feedback
+  const recentScans = useRef<Set<string>>(new Set());
 
   // Lock screen orientation to portrait
   useEffect(() => {
@@ -107,7 +110,25 @@ export default function BarcodeScannerScreen() {
       if (response.ok) {
         console.log('Scan sent successfully:', result);
         setLastScanStatus('success');
+        
+        // Add to client-side recent scans cache
+        recentScans.current.add(employeeId);
+        
+        // Remove from cache after 5 minutes
+        setTimeout(() => {
+          recentScans.current.delete(employeeId);
+        }, 5 * 60 * 1000);
+        
         return { success: true, message: result.message || 'Scan recorded successfully' };
+      } else if (response.status === 409) {
+        // Handle duplicate scan (409 Conflict)
+        console.log('Duplicate scan detected:', result);
+        setLastScanStatus('duplicate');
+        return { 
+          success: false, 
+          message: result.message || 'Employee was recently scanned',
+          isDuplicate: true
+        };
       } else {
         console.error('Server error:', result);
         setLastScanStatus('error');
@@ -139,6 +160,36 @@ export default function BarcodeScannerScreen() {
       return;
     }
     
+    // Client-side duplicate check (immediate feedback)
+    if (recentScans.current.has(data)) {
+      setScanned(true);
+      setScannedData(data);
+      setScanType(type);
+      
+      // Get current date/time
+      const now = new Date();
+      const formattedTime = now.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+      setScanTime(formattedTime);
+      setLastScanStatus('duplicate');
+      
+      alertIsShowing.current = true;
+      
+      // Auto reset after 3 seconds for duplicate
+      setTimeout(() => {
+        alertIsShowing.current = false;
+        resetScanner();
+      }, 3000);
+      
+      return;
+    }
+    
     setScanned(true);
     setScannedData(data);
     setScanType(type);
@@ -164,7 +215,7 @@ export default function BarcodeScannerScreen() {
     // Show confirmation dialog before sending to server
     Alert.alert(
       'Confirm Scan',
-      `Scanned Data: ${data}\nIs this correct?`,
+      `Scanned Data: ${data}\n\nIs this correct?`,
       [
         { 
           text: 'Cancel', 
@@ -180,18 +231,23 @@ export default function BarcodeScannerScreen() {
           onPress: () => {
             // Send data to server after confirmation
             sendScanToServer(data, isoTime, type).then(result => {
-              // Auto-dismiss the scanner and show success in UI
+              // Handle different responses
               if (result.success) {
                 // Auto reset after 2 seconds for success
                 setTimeout(() => {
                   alertIsShowing.current = false;
                   resetScanner();
                 }, 2000);
-              } else {
-                // For errors, show brief alert then auto-dismiss
+              } else if (result.isDuplicate) {
+                // For duplicates, show message for 3 seconds then auto-reset
                 setTimeout(() => {
                   alertIsShowing.current = false;
-                  // Don't auto-reset on error, let user decide
+                  resetScanner();
+                }, 3000);
+              } else {
+                // For other errors, don't auto-reset - let user decide
+                setTimeout(() => {
+                  alertIsShowing.current = false;
                 }, 3000);
               }
             });
@@ -326,10 +382,17 @@ export default function BarcodeScannerScreen() {
             {lastScanStatus && (
               <View style={[
                 styles.statusIndicator,
-                lastScanStatus === 'success' ? styles.statusSuccess : styles.statusError
+                lastScanStatus === 'success' ? styles.statusSuccess : 
+                lastScanStatus === 'duplicate' ? styles.statusDuplicate : 
+                styles.statusError
               ]}>
-                <Text style={styles.statusText}>
-                  {lastScanStatus === 'success' ? '✓ Sent successfully' : '✗ Failed to send'}
+                <Text style={[
+                  styles.statusText,
+                  lastScanStatus === 'duplicate' && { color: '#856404' }
+                ]}>
+                  {lastScanStatus === 'success' ? '✓ Scan recorded successfully' : 
+                   lastScanStatus === 'duplicate' ? '⚠ Employee already scanned recently' : 
+                   '✗ Failed to send'}
                 </Text>
               </View>
             )}
@@ -573,9 +636,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 15,
     marginBottom: 15,
+    alignItems: 'center',
   },
   statusSuccess: {
     backgroundColor: '#d4edda',
+  },
+  statusDuplicate: {
+    backgroundColor: '#fff3cd',
+    borderWidth: 1,
+    borderColor: '#ffeaa7',
   },
   statusError: {
     backgroundColor: '#f8d7da',
