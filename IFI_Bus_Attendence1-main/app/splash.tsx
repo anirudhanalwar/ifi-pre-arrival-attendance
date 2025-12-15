@@ -1,27 +1,26 @@
 import React, { useEffect } from 'react';
 import { Dimensions, Image, StyleSheet, View } from 'react-native';
+import { useRouter } from 'expo-router';
 
 const { width, height } = Dimensions.get('window');
 
-interface SplashScreenProps {
-  onLoadComplete?: () => void;
-}
+export default function SplashScreen() {
+  const router = useRouter();
 
-export default function SplashScreen({ onLoadComplete }: SplashScreenProps) {
   useEffect(() => {
     const timer = setTimeout(() => {
-      onLoadComplete?.();
-    }, 3000); // Show splash for 3 seconds
+      router.replace('/');
+    }, 2000); // Show for 2 seconds
 
     return () => clearTimeout(timer);
-  }, [onLoadComplete]);
+  }, []);
 
   return (
     <View style={styles.container}>
       <Image
         source={require('@/assets/images/intimate_fashions.jpg')}
         style={styles.image}
-        resizeMode="cover"
+        resizeMode="contain"
       />
     </View>
   );
@@ -31,9 +30,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   image: {
-    width: width,
-    height: height,
+    width: width * 0.8, // Adjust size as needed
+    height: height * 0.8,
+    resizeMode: 'contain',
   },
 });

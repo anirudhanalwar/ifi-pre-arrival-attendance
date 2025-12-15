@@ -4,9 +4,11 @@ import { StatusBar } from "expo-status-bar";
 export default function RootLayout() {
   return (
     <>
-      <StatusBar style="light" />
+      <StatusBar style="auto" />
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
+        <Stack.Screen name="splash" /> {/* Splash screen first */}
+        <Stack.Screen name="index" /> {/* Your barcode scanner */}
+        <Stack.Screen name="manual-entry" /> {/* Manual entry screen */}
       </Stack>
     </>
   );
