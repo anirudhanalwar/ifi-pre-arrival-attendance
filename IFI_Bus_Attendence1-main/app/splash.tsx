@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+/*import React, { useEffect } from 'react';
 import { Dimensions, Image, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -38,4 +38,4 @@ const styles = StyleSheet.create({
     height: height * 0.8,
     resizeMode: 'contain',
   },
-});
+});*/
