@@ -9,7 +9,7 @@ import {
     StyleSheet,
 } from 'react-native';
 
-const API_URL = 'http://10.234.65.76:5000/api/scan';
+const API_URL = 'http://10.207.85.76:5000/api/scan';
 
 export default function ManualEntryScreen() {
   const router = useRouter();

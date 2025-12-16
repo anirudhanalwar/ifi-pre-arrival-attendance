@@ -20,8 +20,8 @@ const SCAN_FRAME_SIZE = SCREEN_WIDTH * 0.7;
 
 // API Configuration
 const API_CONFIG = {
-  DEV_API_URL: 'http://10.234.65.76:5000/api/scan',
-  PROD_API_URL: 'https://192.168.2.4/api/scan',
+  DEV_API_URL: 'http://10.207.85.76:5000/api/scan',
+  PROD_API_URL: 'http://localhost:5000',
   IS_DEVELOPMENT: true,
   API_KEY: 'your-api-key-here',
 };
@@ -69,7 +69,7 @@ export default function BarcodeScannerScreen() {
 
   // Lock screen orientation to portrait
   useEffect(() => {
-    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+   // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
     
     return () => {
       ScreenOrientation.unlockAsync();

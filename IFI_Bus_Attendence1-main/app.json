@@ -9,6 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
+      "infoPlist": {"NSCameraUsageDescription":"This app needs camera access to scan QR codes "},
       "supportsTablet": true
     },
     "android": {
