@@ -24,10 +24,10 @@ const SCAN_FRAME_SIZE = Platform.select({
   android: SCREEN_WIDTH * 0.7,
 }) || SCREEN_WIDTH * 0.7; // Default fallback
 
-const BARCODE_TYPES = Platform.select({
-  ios: ['code128', 'code39', 'ean13'] as const,  // iOS supports fewer types
-  android: ['code39', 'code93', 'code128', 'codabar', 'ean13', 'ean8', 'upc_a', 'upc_e', 'itf14'] as const,
-}) || ['code128', 'code39', 'ean13']; // Default fallback
+const BARCODE_TYPES: import('expo-camera').BarcodeType[] = Platform.select({
+  ios: ['code128', 'code39', 'ean13'] as import('expo-camera').BarcodeType[],
+  android: ['code39', 'code93', 'code128', 'codabar', 'ean13', 'ean8', 'upc_a', 'upc_e', 'itf14'] as import('expo-camera').BarcodeType[],
+}) || ['code128', 'code39', 'ean13'] as import('expo-camera').BarcodeType[];
 
 // API Configuration
 const API_CONFIG = {
@@ -481,19 +481,19 @@ export default function BarcodeScannerScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraView
-        style={styles.camera}
-        facing={facing}
-        onBarcodeScanned={isProcessing.current || isSending ? undefined : handleBarCodeScanned}
-        barcodeScannerSettings={{
-  barcodeTypes: [...BARCODE_TYPES], // Spread operator creates mutable copy
-}}
-        enableTorch={torchEnabled}
-        focusable={focusMode === 'on'}
-        // Platform-specific camera props - FIXED: Added proper typing
-        zoom={0} // Default zoom for both platforms
-        autofocus="on" // Standard autofocus that works on both
-      >
+     <CameraView
+  style={styles.camera}
+  facing={facing}
+  onBarcodeScanned={isProcessing.current || isSending ? undefined : handleBarCodeScanned}
+  barcodeScannerSettings={{
+    barcodeTypes: [...BARCODE_TYPES],
+  }}
+  enableTorch={torchEnabled}
+  zoom={Platform.select({ ios: 0.1, android: 0 })}
+  autofocus="on"
+  // Only add focusable for Android
+  {...(Platform.OS === 'android' && { focusable: focusMode === 'on' })}
+>
         {/* Scan Frame Overlay */}
         <View style={styles.overlay}>
           <View style={[styles.scanFrame, { width: SCAN_FRAME_SIZE }]}>
