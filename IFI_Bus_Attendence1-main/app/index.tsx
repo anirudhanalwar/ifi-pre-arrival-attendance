@@ -11,12 +11,23 @@ import {
   TouchableOpacity,
   View,
   Animated,
-  Vibration
+  Vibration,
+  Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const SCAN_FRAME_SIZE = SCREEN_WIDTH * 0.7;
+
+// Platform-specific configurations - FIXED: No undefined values
+const SCAN_FRAME_SIZE = Platform.select({
+  ios: SCREEN_WIDTH * 0.8,      // iOS needs slightly larger frame
+  android: SCREEN_WIDTH * 0.7,
+}) || SCREEN_WIDTH * 0.7; // Default fallback
+
+const BARCODE_TYPES = Platform.select({
+  ios: ['code128', 'code39', 'ean13'] as const,  // iOS supports fewer types
+  android: ['code39', 'code93', 'code128', 'codabar', 'ean13', 'ean8', 'upc_a', 'upc_e', 'itf14'] as const,
+}) || ['code128', 'code39', 'ean13']; // Default fallback
 
 // API Configuration
 const API_CONFIG = {
@@ -52,6 +63,12 @@ export default function BarcodeScannerScreen() {
   const [scanConfirmationCount, setScanConfirmationCount] = useState(0);
   const [isConfirmingScan, setIsConfirmingScan] = useState(false);
   
+  // Platform-specific confirmation threshold - FIXED: No undefined values
+  const CONFIRMATION_THRESHOLD = Platform.select({
+    ios: 1,      // iOS: accept after 1 good scan
+    android: 2,  // Android: require 2 consistent scans
+  }) || 2; // Default fallback
+  
   // Refs for multiple-frame confirmation
   const lastCodeRef = useRef<string | null>(null);
   const confirmationCountRef = useRef<number>(0);
@@ -69,7 +86,7 @@ export default function BarcodeScannerScreen() {
 
   // Lock screen orientation to portrait
   useEffect(() => {
-   // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+    // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
     
     return () => {
       ScreenOrientation.unlockAsync();
@@ -171,7 +188,7 @@ export default function BarcodeScannerScreen() {
           employeeId,
           scanDateTime,
           scanType,
-          deviceInfo: 'Expo-Mobile-Scanner',
+          deviceInfo: `Expo-Mobile-Scanner-${Platform.OS}`,
         }),
       });
 
@@ -230,6 +247,9 @@ export default function BarcodeScannerScreen() {
       return;
     }
     
+    // Log for debugging
+    console.log(`[${Platform.OS}] Scan detected:`, data, 'Type:', type);
+    
     // 1. Validate the scanned data (5 digits only)
     if (!isValidEmployeeId(data)) {
       console.log('Invalid scan - not 5 digits:', data);
@@ -242,7 +262,7 @@ export default function BarcodeScannerScreen() {
       return;
     }
     
-    // 2. Multiple-frame confirmation logic
+    // 2. Platform-specific confirmation logic
     if (data === lastCodeRef.current) {
       confirmationCountRef.current++;
     } else {
@@ -261,15 +281,20 @@ export default function BarcodeScannerScreen() {
     }
     
     // Set timeout to reset confirmation if no repeated scan
+    const timeoutDuration = Platform.select({
+      ios: 500,    // iOS: shorter timeout for faster feedback
+      android: 1000,
+    }) || 1000; // Default fallback
+    
     confirmationTimeoutRef.current = setTimeout(() => {
       lastCodeRef.current = null;
       confirmationCountRef.current = 0;
       setScanConfirmationCount(0);
       setIsConfirmingScan(false);
-    }, 1000);
+    }, timeoutDuration);
     
-    // Only proceed if we have 2 or more consistent scans
-    if (confirmationCountRef.current < 2) {
+    // Only proceed if we have enough consistent scans based on platform
+    if (confirmationCountRef.current < CONFIRMATION_THRESHOLD) {
       return;
     }
     
@@ -461,24 +486,17 @@ export default function BarcodeScannerScreen() {
         facing={facing}
         onBarcodeScanned={isProcessing.current || isSending ? undefined : handleBarCodeScanned}
         barcodeScannerSettings={{
-          barcodeTypes: [
-            'code39',
-            'code93',
-            'code128',
-            'codabar',
-            'ean13',
-            'ean8',
-            'upc_a',
-            'upc_e',
-            'itf14',
-          ],
-        }}
+  barcodeTypes: [...BARCODE_TYPES], // Spread operator creates mutable copy
+}}
         enableTorch={torchEnabled}
         focusable={focusMode === 'on'}
+        // Platform-specific camera props - FIXED: Added proper typing
+        zoom={0} // Default zoom for both platforms
+        autofocus="on" // Standard autofocus that works on both
       >
         {/* Scan Frame Overlay */}
         <View style={styles.overlay}>
-          <View style={styles.scanFrame}>
+          <View style={[styles.scanFrame, { width: SCAN_FRAME_SIZE }]}>
             {/* Animated corners */}
             <Animated.View style={[styles.corner, styles.topLeft, { transform: [{ scale: pulseAnim }] }]} />
             <Animated.View style={[styles.corner, styles.topRight, { transform: [{ scale: pulseAnim }] }]} />
@@ -509,7 +527,7 @@ export default function BarcodeScannerScreen() {
                   {getScanConfirmationMessage()}
                 </Text>
                 <Text style={styles.confirmingSubText}>
-                  Hold steady for confirmation...
+                  {Platform.OS === 'ios' ? 'Processing...' : 'Hold steady for confirmation...'}
                 </Text>
               </View>
             ) : validationError ? (
@@ -522,7 +540,7 @@ export default function BarcodeScannerScreen() {
                   Scan 5-digit Employee ID
                 </Text>
                 <Text style={styles.instructionsSubText}>
-                  Position barcode within frame
+                  {Platform.OS === 'ios' ? 'Hold steady over barcode' : 'Position barcode within frame'}
                 </Text>
               </>
             )}
@@ -590,6 +608,10 @@ export default function BarcodeScannerScreen() {
                 <View style={styles.detailItem}>
                   <Ionicons name="barcode-outline" size={14} color="#666" />
                   <Text style={styles.detailText}>{scanType}</Text>
+                </View>
+                <View style={styles.detailItem}>
+                  <Ionicons name="phone-portrait-outline" size={14} color="#666" />
+                  <Text style={styles.detailText}>{Platform.OS}</Text>
                 </View>
               </View>
             </View>
@@ -665,6 +687,9 @@ export default function BarcodeScannerScreen() {
             <View style={styles.statusIndicator}>
               <Ionicons name="scan-outline" size={24} color="#007AFF" />
               <Text style={styles.readyText}>Ready to Scan</Text>
+              <Text style={styles.platformBadge}>
+                ({Platform.OS.toUpperCase()})
+              </Text>
             </View>
             
             <View style={styles.buttonRow}>
@@ -691,8 +716,8 @@ export default function BarcodeScannerScreen() {
               </Text>
               <Text style={styles.deviceInfo}>
                 {API_CONFIG.IS_DEVELOPMENT 
-                  ? `Dev Mode: ${getApiUrl().replace('http://', '')}`
-                  : 'Production Mode'}
+                  ? `Dev Mode: ${getApiUrl().replace('http://', '')} • ${Platform.OS}`
+                  : `Production • ${Platform.OS}`}
               </Text>
             </View>
           </View>
@@ -743,8 +768,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scanFrame: {
-    width: SCAN_FRAME_SIZE,
-    height: SCAN_FRAME_SIZE * 0.6,
+    height: SCREEN_WIDTH * 0.6, // Height remains proportional
     borderWidth: 2,
     borderColor: 'transparent',
     position: 'relative',
@@ -846,32 +870,32 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
   },
-controlsOverlay: {
-  position: 'absolute',
-  top: 40, // At the very top
-  left: 0, // Start from left
-  right: 0, // Stretch across full width
-  flexDirection: 'row', // Horizontal layout
-  justifyContent: 'space-around', // Space them evenly
-  alignItems: 'center',
-  paddingHorizontal: 10,
-},
-controlButton: {
-  alignItems: 'center',
-  backgroundColor: 'rgba(0,0,0,0.8)',
-  paddingHorizontal: 12,
-  paddingVertical: 6,
-  borderRadius: 20,
-  borderWidth: 1,
-  borderColor: 'rgba(255,255,255,0.3)',
-  minWidth: 80,
-},
-controlButtonText: {
-  color: 'white',
-  fontSize: 11,
-  marginTop: 2,
-  fontWeight: '500',
-},
+  controlsOverlay: {
+    position: 'absolute',
+    top: 40,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  controlButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    minWidth: 80,
+  },
+  controlButtonText: {
+    color: 'white',
+    fontSize: 11,
+    marginTop: 2,
+    fontWeight: '500',
+  },
   loadingOverlay: {
     position: 'absolute',
     top: 0,
@@ -990,6 +1014,15 @@ controlButtonText: {
     fontWeight: 'bold',
     color: '#007AFF',
     marginLeft: 8,
+  },
+  platformBadge: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 8,
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   buttonRow: {
     flexDirection: 'row',
